@@ -17,11 +17,16 @@ limitations under the License.
 package http
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"runtime"
 	"time"
+
+	"github.com/vishvananda/netns"
 
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/kubernetes/pkg/probe"
@@ -65,7 +70,7 @@ func NewWithTLSConfig(config *tls.Config, followNonLocalRedirects bool) Prober {
 
 // Prober is an interface that defines the Probe function for doing HTTP readiness/liveness checks.
 type Prober interface {
-	Probe(req *http.Request, timeout time.Duration) (probe.Result, string, error)
+	Probe(req *http.Request, nsPath string, timeout time.Duration) (probe.Result, string, error)
 }
 
 type httpProber struct {
@@ -74,13 +79,45 @@ type httpProber struct {
 }
 
 // Probe returns a ProbeRunner capable of running an HTTP check.
-func (pr httpProber) Probe(req *http.Request, timeout time.Duration) (probe.Result, string, error) {
+func (pr httpProber) Probe(req *http.Request, nsPath string, timeout time.Duration) (probe.Result, string, error) {
+
+	klog.V(4).Infof("Pod net namespace: %s", nsPath)
+
+	transport := utilnet.SetTransportDefaults(
+		&http.Transport{
+			TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
+			DisableKeepAlives:  true,
+			Proxy:              http.ProxyURL(nil),
+			DisableCompression: true, // removes Accept-Encoding header
+			// DialContext creates unencrypted TCP connections
+			// and is also used by the transport for HTTPS connection
+			DialContext: newNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, nsPath),
+		})
+
 	client := &http.Client{
 		Timeout:       timeout,
-		Transport:     pr.transport,
 		CheckRedirect: RedirectChecker(pr.followNonLocalRedirects),
+
+		Transport: transport,
 	}
+
+	// Switch back to the original namespace
 	return DoHTTPProbe(req, client)
+}
+
+func newNamespacedDialContextWrapper(DialContext func(ctx context.Context, network, addr string) (net.Conn, error), netNSPath string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ns, err := netns.GetFromPath(netNSPath)
+		if err != nil {
+			return nil, fmt.Errorf("get ns '%s': %w", netNSPath, err)
+		}
+		defer ns.Close()
+		runtime.LockOSThread()
+		if err := netns.Set(ns); err != nil {
+			return nil, fmt.Errorf("setns '%s': %w", netNSPath, err)
+		}
+		return DialContext(ctx, network, addr)
+	}
 }
 
 // GetHTTPInterface is an interface for making HTTP requests, that returns a response and error.
@@ -93,6 +130,7 @@ type GetHTTPInterface interface {
 // If the HTTP response code is unsuccessful or HTTP communication fails, it returns Failure.
 // This is exported because some other packages may want to do direct HTTP probes.
 func DoHTTPProbe(req *http.Request, client GetHTTPInterface) (probe.Result, string, error) {
+
 	url := req.URL
 	headers := req.Header
 	res, err := client.Do(req)

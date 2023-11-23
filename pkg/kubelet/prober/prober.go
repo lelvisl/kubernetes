@@ -18,13 +18,16 @@ package prober
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/record"
+	internalapi "k8s.io/cri-api/pkg/apis"
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/events"
@@ -44,12 +47,12 @@ const maxProbeRetries = 3
 
 // Prober helps to check the liveness/readiness/startup of a container.
 type prober struct {
-	exec   execprobe.Prober
-	http   httpprobe.Prober
-	tcp    tcpprobe.Prober
-	grpc   grpcprobe.Prober
-	runner kubecontainer.CommandRunner
-
+	exec     execprobe.Prober
+	http     httpprobe.Prober
+	tcp      tcpprobe.Prober
+	grpc     grpcprobe.Prober
+	runner   kubecontainer.CommandRunner
+	runtime  internalapi.RuntimeService
 	recorder record.EventRecorder
 }
 
@@ -57,7 +60,8 @@ type prober struct {
 // several container info managers.
 func newProber(
 	runner kubecontainer.CommandRunner,
-	recorder record.EventRecorder) *prober {
+	recorder record.EventRecorder,
+	runtime internalapi.RuntimeService) *prober {
 
 	const followNonLocalRedirects = false
 	return &prober{
@@ -66,6 +70,7 @@ func newProber(
 		tcp:      tcpprobe.New(),
 		grpc:     grpcprobe.New(),
 		runner:   runner,
+		runtime:  runtime,
 		recorder: recorder,
 	}
 }
@@ -135,6 +140,35 @@ func (pb *prober) runProbeWithRetries(ctx context.Context, probeType probeType, 
 	return result, output, err
 }
 
+// https://gist.github.com/johscheuer/dc20988895d6fddfd057e221d47587d3
+func (pb *prober) getNS(ctx context.Context, containerID string) (string, error) {
+	u, err := url.Parse(containerID)
+	if err != nil {
+		return "", err
+	}
+	r, err := pb.runtime.ContainerStatus(ctx, u.Host, true)
+	if err != nil {
+		return "", err
+	}
+	info := r.GetInfo()
+
+	var infop any
+	err = json.Unmarshal([]byte(info["info"]), &infop)
+	if err != nil {
+		return "", err
+	}
+
+	//only linux!
+	namespaces := infop.(map[string]any)["runtimeSpec"].(map[string]any)["linux"].(map[string]any)["namespaces"].([]any)
+	for _, ns := range namespaces {
+		nss := ns.(map[string]any)
+		if nss["type"] == "network" {
+			return nss["path"].(string), nil
+		}
+	}
+	return "", fmt.Errorf("not found")
+}
+
 func (pb *prober) runProbe(ctx context.Context, probeType probeType, p *v1.Probe, pod *v1.Pod, status v1.PodStatus, container v1.Container, containerID kubecontainer.ContainerID) (probe.Result, string, error) {
 	timeout := time.Duration(p.TimeoutSeconds) * time.Second
 	if p.Exec != nil {
@@ -142,11 +176,17 @@ func (pb *prober) runProbe(ctx context.Context, probeType probeType, p *v1.Probe
 		command := kubecontainer.ExpandContainerCommandOnlyStatic(p.Exec.Command, container.Env)
 		return pb.exec.Probe(pb.newExecInContainer(ctx, container, containerID, command, timeout))
 	}
+	nsPath, err := pb.getNS(ctx, containerID.String())
+	if err != nil {
+		klog.V(4).ErrorS(err, "Get container net ns", "containerID", containerID.String(), "containerName", container.Name)
+		return probe.Failure, "", fmt.Errorf("Get container net ns for %s:%s, containerID: %s, %w", format.Pod(pod), container.Name, containerID.String(), err)
+	}
 	if p.HTTPGet != nil {
 		req, err := httpprobe.NewRequestForHTTPGetAction(p.HTTPGet, &container, status.PodIP, "probe")
 		if err != nil {
 			return probe.Unknown, "", err
 		}
+
 		if klogV4 := klog.V(4); klogV4.Enabled() {
 			port := req.URL.Port()
 			host := req.URL.Hostname()
@@ -155,7 +195,8 @@ func (pb *prober) runProbe(ctx context.Context, probeType probeType, p *v1.Probe
 			headers := p.HTTPGet.HTTPHeaders
 			klogV4.InfoS("HTTP-Probe", "scheme", scheme, "host", host, "port", port, "path", path, "timeout", timeout, "headers", headers)
 		}
-		return pb.http.Probe(req, timeout)
+
+		return pb.http.Probe(req, nsPath, timeout)
 	}
 	if p.TCPSocket != nil {
 		port, err := probe.ResolveContainerPort(p.TCPSocket.Port, &container)
@@ -167,7 +208,7 @@ func (pb *prober) runProbe(ctx context.Context, probeType probeType, p *v1.Probe
 			host = status.PodIP
 		}
 		klog.V(4).InfoS("TCP-Probe", "host", host, "port", port, "timeout", timeout)
-		return pb.tcp.Probe(host, port, timeout)
+		return pb.tcp.Probe(host, port, nsPath, timeout)
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.GRPCContainerProbe) && p.GRPC != nil {
