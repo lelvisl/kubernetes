@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/component-base/metrics"
+	internalapi "k8s.io/cri-api/pkg/apis"
 	"k8s.io/klog/v2"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
@@ -120,9 +121,10 @@ func NewManager(
 	readinessManager results.Manager,
 	startupManager results.Manager,
 	runner kubecontainer.CommandRunner,
+	runtime internalapi.RuntimeService,
 	recorder record.EventRecorder) Manager {
 
-	prober := newProber(runner, recorder)
+	prober := newProber(runner, recorder, runtime)
 	return &manager{
 		statusManager:    statusManager,
 		prober:           prober,

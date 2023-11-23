@@ -786,6 +786,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 			klet.readinessManager,
 			klet.startupManager,
 			klet.runner,
+			klet.runtimeService,
 			kubeDeps.Recorder)
 	}
 

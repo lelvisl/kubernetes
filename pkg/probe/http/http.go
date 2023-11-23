@@ -63,7 +63,7 @@ func NewWithTLSConfig(config *tls.Config, followNonLocalRedirects bool) Prober {
 
 // Prober is an interface that defines the Probe function for doing HTTP readiness/liveness checks.
 type Prober interface {
-	Probe(req *http.Request, timeout time.Duration) (probe.Result, string, error)
+	Probe(req *http.Request, nsPath string, timeout time.Duration) (probe.Result, string, error)
 }
 
 type httpProber struct {
@@ -72,7 +72,9 @@ type httpProber struct {
 }
 
 // Probe returns a ProbeRunner capable of running an HTTP check.
-func (pr httpProber) Probe(req *http.Request, timeout time.Duration) (probe.Result, string, error) {
+func (pr httpProber) Probe(req *http.Request, nsPath string, timeout time.Duration) (probe.Result, string, error) {
+	klog.V(4).Infof("Pod net namespace: %s", nsPath)
+	pr.transport.DialContext = probe.NewNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, nsPath)
 	client := &http.Client{
 		Timeout:       timeout,
 		Transport:     pr.transport,
@@ -91,6 +93,7 @@ type GetHTTPInterface interface {
 // If the HTTP response code is unsuccessful or HTTP communication fails, it returns Failure.
 // This is exported because some other packages may want to do direct HTTP probes.
 func DoHTTPProbe(req *http.Request, client GetHTTPInterface) (probe.Result, string, error) {
+
 	url := req.URL
 	headers := req.Header
 	res, err := client.Do(req)

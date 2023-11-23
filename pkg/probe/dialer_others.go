@@ -20,8 +20,13 @@ limitations under the License.
 package probe
 
 import (
+	"context"
+	"fmt"
 	"net"
+	"runtime"
 	"syscall"
+
+	"github.com/vishvananda/netns"
 )
 
 // ProbeDialer returns a dialer optimized for probes to avoid lingering sockets on TIME-WAIT state.
@@ -39,4 +44,21 @@ func ProbeDialer() *net.Dialer {
 		},
 	}
 	return dialer
+}
+
+// NewNamespacedDialContextWrapper wraps a dial context with a network namespace
+// after thread will be killed by runtime
+func NewNamespacedDialContextWrapper(DialContext func(ctx context.Context, network, addr string) (net.Conn, error), netNSPath string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ns, err := netns.GetFromPath(netNSPath)
+		if err != nil {
+			return nil, fmt.Errorf("get ns '%s': %w", netNSPath, err)
+		}
+		defer ns.Close()
+		runtime.LockOSThread()
+		if err := netns.Set(ns); err != nil {
+			return nil, fmt.Errorf("setns '%s': %w", netNSPath, err)
+		}
+		return DialContext(ctx, network, addr)
+	}
 }

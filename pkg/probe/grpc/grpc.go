@@ -35,7 +35,7 @@ import (
 
 // Prober is an interface that defines the Probe function for doing GRPC readiness/liveness/startup checks.
 type Prober interface {
-	Probe(host, service string, port int, timeout time.Duration) (probe.Result, string, error)
+	Probe(host, service string, port int, netns string, timeout time.Duration) (probe.Result, string, error)
 }
 
 type grpcProber struct {
@@ -50,15 +50,16 @@ func New() Prober {
 // Returns the Result status, command output, and errors if any.
 // Any failure is considered as a probe failure to mimic grpc_health_probe tool behavior.
 // err is always nil
-func (p grpcProber) Probe(host, service string, port int, timeout time.Duration) (probe.Result, string, error) {
+func (p grpcProber) Probe(host, service string, port int, netns string, timeout time.Duration) (probe.Result, string, error) {
 	v := version.Get()
-
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	opts := []grpc.DialOption{
 		grpc.WithUserAgent(fmt.Sprintf("kube-probe/%s.%s", v.Major, v.Minor)),
 		grpc.WithBlock(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()), //credentials are currently not supported
+		// https://github.com/grpc/grpc-go/issues/2706#issuecomment-477226967
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return probe.ProbeDialer().DialContext(ctx, "tcp", addr)
+			return probe.NewNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, netns)(ctx, "tcp", addr)
 		}),
 	}
 
@@ -66,7 +67,6 @@ func (p grpcProber) Probe(host, service string, port int, timeout time.Duration)
 
 	defer cancel()
 
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := grpc.DialContext(ctx, addr, opts...)
 
 	if err != nil {
