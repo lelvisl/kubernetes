@@ -17,16 +17,11 @@ limitations under the License.
 package http
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"runtime"
 	"time"
-
-	"github.com/vishvananda/netns"
 
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/kubernetes/pkg/probe"
@@ -91,7 +86,7 @@ func (pr httpProber) Probe(req *http.Request, nsPath string, timeout time.Durati
 			DisableCompression: true, // removes Accept-Encoding header
 			// DialContext creates unencrypted TCP connections
 			// and is also used by the transport for HTTPS connection
-			DialContext: newNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, nsPath),
+			DialContext: probe.NewNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, nsPath),
 		})
 
 	client := &http.Client{
@@ -103,21 +98,6 @@ func (pr httpProber) Probe(req *http.Request, nsPath string, timeout time.Durati
 
 	// Switch back to the original namespace
 	return DoHTTPProbe(req, client)
-}
-
-func newNamespacedDialContextWrapper(DialContext func(ctx context.Context, network, addr string) (net.Conn, error), netNSPath string) func(ctx context.Context, network, addr string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		ns, err := netns.GetFromPath(netNSPath)
-		if err != nil {
-			return nil, fmt.Errorf("get ns '%s': %w", netNSPath, err)
-		}
-		defer ns.Close()
-		runtime.LockOSThread()
-		if err := netns.Set(ns); err != nil {
-			return nil, fmt.Errorf("setns '%s': %w", netNSPath, err)
-		}
-		return DialContext(ctx, network, addr)
-	}
 }
 
 // GetHTTPInterface is an interface for making HTTP requests, that returns a response and error.

@@ -52,6 +52,7 @@ func (pr tcpProber) Probe(host string, port int, netNSPath string, timeout time.
 // If the socket fails to open, it returns Failure.
 // This is exported because some other packages may want to do direct TCP probes.
 func DoTCPProbe(addr, netNSPath string, timeout time.Duration) (probe.Result, string, error) {
+	// linux only!
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
