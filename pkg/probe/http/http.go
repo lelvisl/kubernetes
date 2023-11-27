@@ -75,28 +75,13 @@ type httpProber struct {
 
 // Probe returns a ProbeRunner capable of running an HTTP check.
 func (pr httpProber) Probe(req *http.Request, nsPath string, timeout time.Duration) (probe.Result, string, error) {
-
 	klog.V(4).Infof("Pod net namespace: %s", nsPath)
-
-	transport := utilnet.SetTransportDefaults(
-		&http.Transport{
-			TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
-			DisableKeepAlives:  true,
-			Proxy:              http.ProxyURL(nil),
-			DisableCompression: true, // removes Accept-Encoding header
-			// DialContext creates unencrypted TCP connections
-			// and is also used by the transport for HTTPS connection
-			DialContext: probe.NewNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, nsPath),
-		})
-
+	pr.transport.DialContext = probe.NewNamespacedDialContextWrapper(probe.ProbeDialer().DialContext, nsPath)
 	client := &http.Client{
 		Timeout:       timeout,
+		Transport:     pr.transport,
 		CheckRedirect: RedirectChecker(pr.followNonLocalRedirects),
-
-		Transport: transport,
 	}
-
-	// Switch back to the original namespace
 	return DoHTTPProbe(req, client)
 }
 

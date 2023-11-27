@@ -155,7 +155,6 @@ func (pb *prober) runProbe(ctx context.Context, probeType probeType, p *v1.Probe
 		if err != nil {
 			return probe.Unknown, "", err
 		}
-
 		if klogV4 := klog.V(4); klogV4.Enabled() {
 			port := req.URL.Port()
 			host := req.URL.Hostname()
