@@ -17,6 +17,7 @@ limitations under the License.
 package prober
 
 import (
+	internalapi "k8s.io/cri-api/pkg/apis"
 	"sync"
 	"time"
 
@@ -118,9 +119,10 @@ func NewManager(
 	readinessManager results.Manager,
 	startupManager results.Manager,
 	runner kubecontainer.CommandRunner,
+	runtime internalapi.RuntimeService,
 	recorder record.EventRecorder) Manager {
 
-	prober := newProber(runner, recorder)
+	prober := newProber(runner, recorder, runtime)
 	return &manager{
 		statusManager:    statusManager,
 		prober:           prober,

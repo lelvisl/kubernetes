@@ -91,7 +91,7 @@ func (e errorNotServeServerMock) Watch(_ *grpchealth.HealthCheckRequest, stream 
 func TestGrpcProber_Probe(t *testing.T) {
 	t.Run("Should: failed but return nil error because cant find host", func(t *testing.T) {
 		s := New()
-		p, o, err := s.Probe("", "", 32, time.Second)
+		p, o, err := s.Probe("", "", 32, "", time.Second)
 		assert.Equal(t, probe.Failure, p)
 		assert.Equal(t, nil, err)
 		assert.Equal(t, "timeout: failed to connect service \":32\" within 1s: context deadline exceeded", o)
@@ -109,7 +109,7 @@ func TestGrpcProber_Probe(t *testing.T) {
 
 		// take some time to wait server boot
 		time.Sleep(2 * time.Second)
-		p, _, err := s.Probe("127.0.0.1", "", port, time.Second)
+		p, _, err := s.Probe("127.0.0.1", "", port, "", time.Second)
 		assert.Equal(t, probe.Failure, p)
 		assert.Equal(t, nil, err)
 	})
@@ -125,7 +125,7 @@ func TestGrpcProber_Probe(t *testing.T) {
 		}()
 		// take some time to wait server boot
 		time.Sleep(2 * time.Second)
-		p, o, err := s.Probe("0.0.0.0", "", port, time.Second)
+		p, o, err := s.Probe("0.0.0.0", "", port, "", time.Second)
 		assert.Equal(t, probe.Failure, p)
 		assert.Equal(t, nil, err)
 		assert.Equal(t, "service unhealthy (responded with \"NOT_SERVING\")", o)
@@ -143,7 +143,7 @@ func TestGrpcProber_Probe(t *testing.T) {
 		}()
 		// take some time to wait server boot
 		time.Sleep(2 * time.Second)
-		p, o, err := s.Probe("0.0.0.0", "", port, time.Second*2)
+		p, o, err := s.Probe("0.0.0.0", "", port, "", time.Second*2)
 		assert.Equal(t, probe.Failure, p)
 		assert.Equal(t, nil, err)
 		assert.Equal(t, "timeout: health rpc did not complete within 2s", o)
@@ -162,7 +162,7 @@ func TestGrpcProber_Probe(t *testing.T) {
 		}()
 		// take some time to wait server boot
 		time.Sleep(2 * time.Second)
-		p, _, err := s.Probe("0.0.0.0", "", port, time.Second*2)
+		p, _, err := s.Probe("0.0.0.0", "", port, "", time.Second*2)
 		assert.Equal(t, probe.Success, p)
 		assert.Equal(t, nil, err)
 	})
@@ -179,7 +179,7 @@ func TestGrpcProber_Probe(t *testing.T) {
 		}()
 		// take some time to wait server boot
 		time.Sleep(2 * time.Second)
-		p, _, err := s.Probe("0.0.0.0", "", port, time.Second*2)
+		p, _, err := s.Probe("0.0.0.0", "", port, "", time.Second*2)
 		assert.Equal(t, probe.Success, p)
 		assert.Equal(t, nil, err)
 	})

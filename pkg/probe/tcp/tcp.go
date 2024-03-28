@@ -17,9 +17,13 @@ limitations under the License.
 package tcp
 
 import (
+	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"time"
+
+	"github.com/vishvananda/netns"
 
 	"k8s.io/kubernetes/pkg/probe"
 
@@ -33,21 +37,42 @@ func New() Prober {
 
 // Prober is an interface that defines the Probe function for doing TCP readiness/liveness checks.
 type Prober interface {
-	Probe(host string, port int, timeout time.Duration) (probe.Result, string, error)
+	Probe(host string, port int, netNSPath string, timeout time.Duration) (probe.Result, string, error)
 }
 
 type tcpProber struct{}
 
 // Probe checks that a TCP connection to the address can be opened.
-func (pr tcpProber) Probe(host string, port int, timeout time.Duration) (probe.Result, string, error) {
-	return DoTCPProbe(net.JoinHostPort(host, strconv.Itoa(port)), timeout)
+func (pr tcpProber) Probe(host string, port int, netNSPath string, timeout time.Duration) (probe.Result, string, error) {
+	return DoTCPProbe(net.JoinHostPort(host, strconv.Itoa(port)), netNSPath, timeout)
 }
 
 // DoTCPProbe checks that a TCP socket to the address can be opened.
 // If the socket can be opened, it returns Success
 // If the socket fails to open, it returns Failure.
 // This is exported because some other packages may want to do direct TCP probes.
-func DoTCPProbe(addr string, timeout time.Duration) (probe.Result, string, error) {
+func DoTCPProbe(addr, netNSPath string, timeout time.Duration) (probe.Result, string, error) {
+	// linux only!
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	origns, err := netns.Get()
+	if err != nil {
+		return probe.Failure, fmt.Sprintf("get ns '%s': %w", netNSPath, err), nil
+	}
+	defer origns.Close()
+
+	ns, err := netns.GetFromPath(netNSPath)
+	if err != nil {
+		return probe.Failure, fmt.Sprintf("get ns '%s': %w", netNSPath, err), nil
+	}
+	defer ns.Close()
+
+	if err := netns.Set(ns); err != nil {
+		return probe.Failure, fmt.Sprintf("setns '%s': %w", netNSPath, err), nil
+	}
+	defer netns.Set(origns)
+
 	d := probe.ProbeDialer()
 	d.Timeout = timeout
 	conn, err := d.Dial("tcp", addr)
